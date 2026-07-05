@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # YouTube Analytics Tool — Setup & Usage Guide
 
 This tool pulls YouTube Analytics data automatically via the YouTube API,
@@ -164,6 +163,3 @@ All CSV files are saved to the `output/` folder:
 If the script crashes, copy the error message and share it — most errors during
 first run are either a missing package (fix: re-run `pip install -r requirements.txt`)
 or the `client_secret.json` file being in the wrong place.
-=======
-# your-analytics
->>>>>>> aa5df2c1939604ce7a19c1da6d013d8877edec05

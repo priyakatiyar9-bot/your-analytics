@@ -1,179 +1,258 @@
 # =============================================================================
-# auth.py — Handles login and access management
+# auth.py — Handles Google OAuth for both web flow and local script
 # =============================================================================
-# What this file does:
-#   1. Opens a browser window for the channel owner to log in with Google
-#      and grant this tool read-only access to their YouTube Analytics data.
-#   2. Saves the resulting token locally so the script can run again
-#      without asking the creator to log in every time.
-#   3. Automatically enforces a 30-day expiry — after that, the token is
-#      deleted and the creator would need to log in again.
-#   4. Provides a revoke_access() function to immediately delete a creator's
-#      stored token if they want to cut off access early.
+# This file has two modes:
 #
-# Nothing in here stores or sends data anywhere — it only manages the local
-# token file on your own machine.
+# 1. WEB MODE (used by app.py)
+#    The creator clicks a link, gets sent to Google to log in, then Google
+#    sends them back to our app with an authorisation code. We exchange that
+#    code for a token and store it in the database.
+#
+# 2. LOCAL MODE (used by run_all.py on your own machine)
+#    Opens a browser window locally for authentication. Used when you want
+#    to pull data yourself without going through the web app.
+#
+# The fetch scripts (fetch_video_stats.py etc.) always use the database
+# to load tokens — they don't care which mode was used to create them.
 # =============================================================================
 
 import os
-import json
 import datetime
+import json
 
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import googleapiclient.discovery
 
-from config import CLIENT_SECRET_FILE, TOKENS_DIR, ACCESS_DURATION_DAYS
+from database import save_token, load_token_by_label, load_token
 
-# These are the two permissions the tool requests from the creator:
-#   yt-analytics.readonly  → read their YouTube Analytics data
-#   youtube.readonly       → read their video list and metadata
+# The two permissions this tool requests from creators:
+#   yt-analytics.readonly → read their YouTube Analytics data
+#   youtube.readonly      → read their video list and metadata
 SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
+ACCESS_DURATION_DAYS = 30
 
-def get_authenticated_services(channel_label="default"):
+
+# =============================================================================
+# WEB FLOW — used by app.py
+# =============================================================================
+
+def get_web_flow(redirect_uri):
     """
-    Authenticates with Google and returns two API service objects:
-      - youtube          → for YouTube Data API (video list, metadata, duration)
-      - youtube_analytics → for YouTube Analytics API (views, retention, traffic, etc.)
+    Creates a Google OAuth flow object for the web app.
 
-    channel_label:
-      A short nickname for this channel, used to name the token file.
-      Examples: "test_channel", "creator_jane", "channel_2"
-      Use the same label each time you run for the same creator — it's how
-      the tool knows which stored token to use.
+    The client credentials are read from environment variables
+    (set in Render dashboard) rather than client_secret.json,
+    so the file doesn't need to be on the server.
 
-    Returns (youtube, youtube_analytics) — two service objects.
-    Returns (None, None) if access has expired or something went wrong.
+    redirect_uri: the URL Google sends the creator back to after login
+                  e.g. "https://your-app.onrender.com/callback"
     """
+    client_config = {
+        "web": {
+            "client_id":     os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
+            "token_uri":     "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }
+    }
 
-    # Make sure the tokens folder exists
-    os.makedirs(TOKENS_DIR, exist_ok=True)
-    token_file = os.path.join(TOKENS_DIR, f"{channel_label}.json")
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
+    )
+    return flow
 
-    creds = None
 
-    # --- Check if we already have a saved token for this channel ---
-    if os.path.exists(token_file):
-        with open(token_file, "r") as f:
-            token_data = json.load(f)
+def get_authorization_url(redirect_uri):
+    """
+    Generates the Google login URL that the creator gets sent to.
+    Returns (auth_url, state) — state is a security token we check on return.
+    """
+    flow = get_web_flow(redirect_uri)
+    auth_url, state = flow.authorization_url(
+        access_type="offline",      # gives us a refresh token so we don't need re-login
+        include_granted_scopes="true",
+        prompt="consent",           # always show consent screen so refresh token is issued
+    )
+    return auth_url, state
 
-        # Check the 30-day expiry
-        expires_at = datetime.datetime.fromisoformat(token_data["expires_at"])
-        if datetime.datetime.now() > expires_at:
-            print(f"\n⏰  Access for '{channel_label}' expired on "
-                  f"{expires_at.strftime('%d %b %Y')}.")
-            print("    The creator needs to log in again to re-grant access.")
-            print("    Run the script and they will be prompted automatically.\n")
-            os.remove(token_file)
-            return None, None
 
-        # Load stored credentials
-        cred_info = token_data["credentials"]
+def handle_callback(redirect_uri, authorization_response_url, state):
+    """
+    Called after Google redirects the creator back to our app.
+
+    Exchanges the authorisation code in the URL for actual credentials,
+    fetches the creator's channel info, and saves everything to the database.
+
+    Returns (channel_id, channel_name, expires_at) on success.
+    """
+    flow = get_web_flow(redirect_uri)
+    flow.fetch_token(authorization_response=authorization_response_url)
+    credentials = flow.credentials
+
+    # Use the credentials to find out which channel just connected
+    youtube = googleapiclient.discovery.build(
+        "youtube", "v3", credentials=credentials
+    )
+    channel_response = youtube.channels().list(
+        part="id,snippet", mine=True
+    ).execute()
+
+    if not channel_response.get("items"):
+        raise Exception("No YouTube channel found for this Google account.")
+
+    channel = channel_response["items"][0]
+    channel_id   = channel["id"]
+    channel_name = channel["snippet"]["title"]
+
+    # Use the channel name (lowercased, spaces replaced) as the label
+    channel_label = channel_name.lower().replace(" ", "_")[:30]
+
+    # Save to database
+    expires_at = save_token(channel_id, channel_name, channel_label, credentials)
+
+    return channel_id, channel_name, expires_at
+
+
+# =============================================================================
+# LOCAL FLOW — used by run_all.py on your own machine
+# =============================================================================
+
+def get_authenticated_services_local(channel_label="default"):
+    """
+    Local version of authentication — opens a browser window on your machine.
+    Used by run_all.py when pulling data locally.
+
+    Loads the token from the database if it exists, otherwise opens
+    a browser for login and saves the new token to the database.
+
+    Returns (youtube, youtube_analytics) service objects,
+    or (None, None) if access has expired.
+    """
+    # Try loading existing token from database
+    token_row = load_token_by_label(channel_label)
+
+    if token_row:
+        expires_at = token_row["expires_at"]
+        days_left  = (expires_at - datetime.datetime.now()).days
+        print(f"\n✅  Using saved access for '{channel_label}'.")
+        print(f"    Expires in {days_left} day(s) on {expires_at.strftime('%d %b %Y')}.\n")
+
+        cred_info = json.loads(token_row["credentials_json"])
         creds = Credentials(
-            token=cred_info["token"],
-            refresh_token=cred_info["refresh_token"],
-            token_uri=cred_info["token_uri"],
-            client_id=cred_info["client_id"],
-            client_secret=cred_info["client_secret"],
-            scopes=cred_info["scopes"],
+            token=         cred_info["token"],
+            refresh_token= cred_info["refresh_token"],
+            token_uri=     cred_info["token_uri"],
+            client_id=     cred_info["client_id"],
+            client_secret= cred_info["client_secret"],
+            scopes=        cred_info["scopes"],
         )
 
-        days_left = (expires_at - datetime.datetime.now()).days
-        print(f"\n✅  Using saved access for '{channel_label}'.")
-        print(f"    Access expires in {days_left} day(s) on "
-              f"{expires_at.strftime('%d %b %Y')}.\n")
-
-    # --- If no valid token, start the OAuth login flow ---
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            # Token exists but just needs a refresh — no browser needed
+        # Refresh if the access token has expired (refresh token handles this silently)
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-        else:
-            # No token at all — open browser for the creator to log in
-            print(f"\n🔐  No saved access found for '{channel_label}'.")
-            print(f"    A browser window will open for the creator to log in.")
-            print(f"    Access will last {ACCESS_DURATION_DAYS} days, "
-                  f"then expire automatically.\n")
+            # Update the stored token with the refreshed credentials
+            channel_id   = token_row["channel_id"]
+            channel_name = token_row["channel_name"]
+            save_token(channel_id, channel_name, channel_label, creds)
 
-            flow = InstalledAppFlow.from_client_secrets_file(
-                CLIENT_SECRET_FILE, SCOPES
-            )
-            creds = flow.run_local_server(port=0)
+    else:
+        # No token — open browser for local login
+        print(f"\n🔐  No saved access found for '{channel_label}'.")
+        print(f"    A browser window will open to log in.")
+        print(f"    Access will last {ACCESS_DURATION_DAYS} days.\n")
 
-        # Save the token with timestamps
-        granted_at = datetime.datetime.now()
-        expires_at = granted_at + datetime.timedelta(days=ACCESS_DURATION_DAYS)
+        flow = InstalledAppFlow.from_client_secrets_file(
+            "client_secret.json", SCOPES
+        )
+        creds = flow.run_local_server(port=0)
 
-        token_data = {
-            "channel_label": channel_label,
-            "granted_at": granted_at.isoformat(),
-            "expires_at": expires_at.isoformat(),
-            "credentials": {
-                "token": creds.token,
-                "refresh_token": creds.refresh_token,
-                "token_uri": creds.token_uri,
-                "client_id": creds.client_id,
-                "client_secret": creds.client_secret,
-                "scopes": list(creds.scopes),
-            },
-        }
+        # Get channel info and save to database
+        youtube_temp = googleapiclient.discovery.build(
+            "youtube", "v3", credentials=creds
+        )
+        channel_response = youtube_temp.channels().list(
+            part="id,snippet", mine=True
+        ).execute()
+        channel    = channel_response["items"][0]
+        channel_id = channel["id"]
+        channel_name = channel["snippet"]["title"]
 
-        with open(token_file, "w") as f:
-            json.dump(token_data, f, indent=2)
+        save_token(channel_id, channel_name, channel_label, creds)
+        print(f"✅  Access saved for '{channel_name}'.\n")
 
-        print(f"\n✅  Access granted and saved for '{channel_label}'.")
-        print(f"    Access will automatically expire on "
-              f"{expires_at.strftime('%d %b %Y')}.\n")
-
-    # Build and return the two API service objects
+    # Build and return both API service objects
     youtube = googleapiclient.discovery.build(
         "youtube", "v3", credentials=creds
     )
     youtube_analytics = googleapiclient.discovery.build(
         "youtubeAnalytics", "v2", credentials=creds
     )
-
     return youtube, youtube_analytics
 
 
-def revoke_access(channel_label="default"):
+def get_services_from_db(channel_id):
     """
-    Immediately deletes the stored token for a channel.
+    Loads a creator's credentials from the database by channel ID
+    and returns ready-to-use API service objects.
 
-    After calling this, the script can no longer access that channel's data
-    until the creator logs in again and re-grants access.
+    Used by run_all.py when pulling data for a specific creator
+    who connected via the web app.
 
-    Note: this only deletes the local token file. If the creator also wants
-    to fully revoke the app's permission on Google's side, they can go to:
-    https://myaccount.google.com/permissions
-    and remove "YouTube Analytics Tool" from the list.
+    Returns (youtube, youtube_analytics) or (None, None) if expired/not found.
     """
-    token_file = os.path.join(TOKENS_DIR, f"{channel_label}.json")
-    if os.path.exists(token_file):
-        os.remove(token_file)
-        print(f"\n✅  Access for '{channel_label}' has been revoked.")
-        print(f"    The token file has been deleted from this machine.")
-        print(f"    To fully remove app permissions on Google's side, visit:")
-        print(f"    https://myaccount.google.com/permissions\n")
-    else:
-        print(f"\n⚠️   No stored token found for '{channel_label}'. Nothing to revoke.\n")
+    token_row = load_token(channel_id)
+    if not token_row:
+        print(f"\n⏰  No valid token found for channel ID: {channel_id}")
+        print("    Access may have expired. The creator needs to reconnect.\n")
+        return None, None
+
+    cred_info = json.loads(token_row["credentials_json"])
+    creds = Credentials(
+        token=         cred_info["token"],
+        refresh_token= cred_info["refresh_token"],
+        token_uri=     cred_info["token_uri"],
+        client_id=     cred_info["client_id"],
+        client_secret= cred_info["client_secret"],
+        scopes=        cred_info["scopes"],
+    )
+
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        save_token(
+            token_row["channel_id"],
+            token_row["channel_name"],
+            token_row["channel_label"],
+            creds
+        )
+
+    youtube = googleapiclient.discovery.build(
+        "youtube", "v3", credentials=creds
+    )
+    youtube_analytics = googleapiclient.discovery.build(
+        "youtubeAnalytics", "v2", credentials=creds
+    )
+    return youtube, youtube_analytics
 
 
 def get_channel_id(youtube):
     """
-    Returns the authenticated channel's ID (e.g. "UCxxxxxxxxxxxxxxxx").
-    Used internally by the fetch scripts.
+    Returns the authenticated channel's ID and name.
+    Used by run_all.py.
     """
     response = youtube.channels().list(part="id,snippet", mine=True).execute()
     if not response.get("items"):
         raise Exception("Could not find a YouTube channel for this account.")
-    channel = response["items"][0]
-    channel_id = channel["id"]
+    channel      = response["items"][0]
+    channel_id   = channel["id"]
     channel_name = channel["snippet"]["title"]
-    print(f"📺  Channel found: '{channel_name}' (ID: {channel_id})\n")
+    print(f"📺  Channel: '{channel_name}' (ID: {channel_id})\n")
     return channel_id
