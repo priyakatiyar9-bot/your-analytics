@@ -158,6 +158,7 @@ def fetch_analytics_for_all_videos(youtube_analytics, channel_id):
                 "likes": int(row_dict.get("likes", 0)),
                 "dislikes": int(row_dict.get("dislikes", 0)),
                 "shares": int(row_dict.get("shares", 0)),
+                "comments": int(row_dict.get("comments", 0)),
             }
 
     return analytics
@@ -265,7 +266,7 @@ def run(youtube, youtube_analytics, channel_id):
         "impressions", "impression_click_through_rate",
         "unique_viewers", "returning_viewers", "casual_viewers",
         "regular_viewers", "subscribers_gained", "subscribers_lost",
-        "likes", "dislikes",
+        "likes", "dislikes", "shares", "comments_count",
     ]
 
     rows_written = 0
@@ -299,6 +300,7 @@ def run(youtube, youtube_analytics, channel_id):
                 "likes": a.get("likes", 0),
                 "dislikes": a.get("dislikes", 0),
                 "shares": a.get("shares", 0),
+                "comments_count": a.get("comments", 0),
             })
             rows_written += 1
 
