@@ -31,6 +31,7 @@ import fetch_video_stats
 import fetch_traffic_sources
 import fetch_retention
 import fetch_demographics
+import fetch_comments
 
 
 # =============================================================================
@@ -97,6 +98,7 @@ def main():
     fetch_traffic_sources.run(youtube_analytics, channel_id, video_map)
     fetch_retention.run(youtube_analytics, channel_id, video_map)
     fetch_demographics.run(youtube_analytics, channel_id)
+    fetch_comments.run(youtube, video_map)
 
     print("\n" + "=" * 60)
     print("  ✅  Done! CSV files saved to the output/ folder.")

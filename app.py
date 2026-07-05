@@ -186,35 +186,39 @@ SUCCESS_PAGE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Connected — YouR</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0f0f0f;
-            color: #fff;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: #f5f5f3;
+            color: #1f1f1f;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
         }
-        .container { text-align: center; padding: 40px 20px; max-width: 480px; }
-        .checkmark { font-size: 64px; margin-bottom: 24px; }
-        h1 { font-size: 28px; font-weight: 700; margin-bottom: 12px; }
-        .channel { color: #ff4444; }
-        p { color: #888; font-size: 15px; line-height: 1.6; margin-bottom: 8px; }
-        .expiry { color: #555; font-size: 13px; margin-top: 24px; }
+        .container { text-align: center; padding: 40px 20px; max-width: 440px; }
+        .logo { font-size: 28px; font-weight: 800; letter-spacing: -1px; margin-bottom: 32px; color: #1f1f1f; }
+        .logo span { color: #e05252; }
+        .checkmark { font-size: 56px; margin-bottom: 20px; }
+        h1 { font-size: 24px; font-weight: 700; margin-bottom: 10px; color: #1f1f1f; }
+        .channel { color: #e05252; }
+        p { color: #aaa; font-size: 14px; line-height: 1.6; margin-bottom: 6px; font-weight: 400; }
+        .expiry { color: #ccc; font-size: 12px; margin-top: 24px; line-height: 1.7; }
+        .expiry a { color: #bbb; }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="logo">You<span>R</span></div>
         <div class="checkmark">✅</div>
         <h1>You're connected, <span class="channel">{{ channel_name }}</span></h1>
         <p>YouR now has read-only access to your YouTube Analytics.</p>
         <p>You can close this tab.</p>
         <p class="expiry">Access expires automatically on {{ expires_at }}.<br>
         To revoke access early, visit
-        <a href="https://myaccount.google.com/permissions"
-           style="color:#888">Google Account Settings</a>.</p>
+        <a href="https://myaccount.google.com/permissions">Google Account Settings</a>.</p>
     </div>
 </body>
 </html>
@@ -226,22 +230,26 @@ ERROR_PAGE = """
 <head>
     <meta charset="UTF-8">
     <title>Something went wrong — YouR</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0f0f0f; color: #fff;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: #f5f5f3; color: #1f1f1f;
             min-height: 100vh; display: flex;
             align-items: center; justify-content: center;
         }
-        .container { text-align: center; padding: 40px 20px; max-width: 480px; }
-        h1 { font-size: 24px; margin-bottom: 16px; }
-        p { color: #888; font-size: 14px; line-height: 1.6; }
-        a { color: #ff4444; }
+        .container { text-align: center; padding: 40px 20px; max-width: 440px; }
+        .logo { font-size: 28px; font-weight: 800; letter-spacing: -1px; margin-bottom: 32px; color: #1f1f1f; }
+        .logo span { color: #e05252; }
+        h1 { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: #1f1f1f; }
+        p { color: #aaa; font-size: 13px; line-height: 1.6; font-weight: 400; }
+        a { color: #e05252; text-decoration: none; }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="logo">You<span>R</span></div>
         <h1>Something went wrong</h1>
         <p>{{ error_message }}</p>
         <p style="margin-top:20px"><a href="/">Try again</a></p>

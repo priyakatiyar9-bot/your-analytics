@@ -123,7 +123,8 @@ def fetch_analytics_for_all_videos(youtube_analytics, channel_id):
             "subscribersLost,"
             "likes,"
             "dislikes,"
-            "comments"
+            "comments,"
+            "shares"
         ),
         sort="-views",
         maxResults=200,  # increase if you have more than 200 videos
@@ -156,6 +157,7 @@ def fetch_analytics_for_all_videos(youtube_analytics, channel_id):
                 "subscribers_lost": int(row_dict.get("subscribersLost", 0)),
                 "likes": int(row_dict.get("likes", 0)),
                 "dislikes": int(row_dict.get("dislikes", 0)),
+                "shares": int(row_dict.get("shares", 0)),
             }
 
     return analytics
@@ -296,6 +298,7 @@ def run(youtube, youtube_analytics, channel_id):
                 "subscribers_lost": a.get("subscribers_lost", 0),
                 "likes": a.get("likes", 0),
                 "dislikes": a.get("dislikes", 0),
+                "shares": a.get("shares", 0),
             })
             rows_written += 1
 
