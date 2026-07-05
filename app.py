@@ -24,6 +24,14 @@ app = Flask(__name__)
 # Secret key for securing session cookies — set this in Render environment variables
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-this")
 
+# Create database table on startup if it doesn't exist
+from database import setup_database
+with app.app_context():
+    try:
+        setup_database()
+    except Exception as e:
+        print(f"Database setup warning: {e}")
+
 
 # =============================================================================
 # HTML TEMPLATES
