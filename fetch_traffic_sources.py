@@ -59,44 +59,41 @@ SOURCE_TYPE_LABELS = {
 }
 
 
-def run(youtube_analytics, channel_id, video_map):
+def fetch_traffic_for_video(youtube_analytics, channel_id, video_id, publish_date):
     """
-    Main function — fetches traffic source data and writes traffic_sources.csv.
-    Called by run_all.py.
-
-    video_map: dict of { video_id: { "title": ..., ... } }
-               passed in from run_all.py so we can look up video titles.
+    Fetches traffic source breakdown for a single video.
+    Returns a list of row dicts.
     """
-    print("\n🚦  Fetching traffic source breakdown per video...")
-
-    # Query Analytics API — one call gets all videos × all traffic source types
-    print("  → Querying Analytics API for traffic sources...")
     try:
         response = youtube_analytics.reports().query(
             ids=f"channel=={channel_id}",
-            startDate=START_DATE,
+            startDate=publish_date,
             endDate=END_DATE,
-            dimensions="video,insightTrafficSourceType",
+            dimensions="insightTrafficSourceType",
             metrics=(
                 "views,"
                 "estimatedMinutesWatched,"
                 "averageViewDuration,"
-                "averageViewPercentage,"
-                "impressions,"
-                "impressionsClickThroughRate"
+                "averageViewPercentage"
             ),
-            sort="video,-views",
-            maxResults=500,  # covers ~25 videos × ~20 source types; increase if needed
+            filters=f"video=={video_id}",
+            sort="-views",
         ).execute()
+        return response.get("rows", []), [h["name"] for h in response.get("columnHeaders", [])]
     except Exception as e:
-        print(f"  ❌  Failed to fetch traffic source data: {e}")
-        return
+        print(f"    ⚠️  Could not fetch traffic sources for {video_id}: {e}")
+        return [], []
 
-    column_headers = [h["name"] for h in response.get("columnHeaders", [])]
-    rows = response.get("rows", [])
-    print(f"  → Received {len(rows)} rows (video × source type combinations).")
 
-    # Write to CSV
+def run(youtube_analytics, channel_id, video_map):
+    """
+    Main function — fetches traffic source data per video and writes traffic_sources.csv.
+    Called by run_all.py.
+
+    video_map: dict of { video_id: { "title": ..., "publish_time": ... } }
+    """
+    print("\n🚦  Fetching traffic source breakdown per video...")
+
     output_path = os.path.join(OUTPUT_DIR, "traffic_sources.csv")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -113,40 +110,46 @@ def run(youtube_analytics, channel_id, video_map):
     ]
 
     rows_written = 0
+    videos_done = 0
+
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-        for row in rows:
-            row_dict = dict(zip(column_headers, row))
-            vid_id = row_dict.get("video", "")
-            source_code = row_dict.get("insightTrafficSourceType", "")
+        for video_id, meta in video_map.items():
+            videos_done += 1
+            title = meta.get("title", "Unknown")
+            publish_date = meta.get("publish_time", START_DATE)
 
-            # Look up the friendly label for this source type
-            source_label = SOURCE_TYPE_LABELS.get(source_code, source_code)
+            print(f"  → [{videos_done}/{len(video_map)}] Traffic sources: {title[:50]}...")
 
-            # Look up the video title from the video_map
-            video_title = video_map.get(vid_id, {}).get("title", "Unknown")
+            rows, column_headers = fetch_traffic_for_video(
+                youtube_analytics, channel_id, video_id, publish_date
+            )
 
-            writer.writerow({
-                "video_id": vid_id,
-                "video_title": video_title,
-                "traffic_source_type": source_label,
-                "views": int(row_dict.get("views", 0)),
-                "watch_time_hours": round(
-                    float(row_dict.get("estimatedMinutesWatched", 0)) / 60, 1
-                ),
-                "average_view_duration": int(
-                    row_dict.get("averageViewDuration", 0)
-                ),
-                "average_percentage_viewed": round(
-                    float(row_dict.get("averageViewPercentage", 0)), 2
-                ),
-                "impressions": int(row_dict.get("impressions", 0) or 0),
-                "impressions_click_through_rate": round(
-                    float(row_dict.get("impressionsClickThroughRate", 0) or 0), 2
-                ),
-            })
-            rows_written += 1
+            for row in rows:
+                row_dict = dict(zip(column_headers, row))
+                source_code  = row_dict.get("insightTrafficSourceType", "")
+                source_label = SOURCE_TYPE_LABELS.get(source_code, source_code)
 
-    print(f"  ✅  traffic_sources.csv written — {rows_written} rows saved to {output_path}")
+                writer.writerow({
+                    "video_id":   video_id,
+                    "video_title": title,
+                    "traffic_source_type": source_label,
+                    "views": int(row_dict.get("views", 0)),
+                    "watch_time_hours": round(
+                        float(row_dict.get("estimatedMinutesWatched", 0)) / 60, 1
+                    ),
+                    "average_view_duration": int(
+                        row_dict.get("averageViewDuration", 0)
+                    ),
+                    "average_percentage_viewed": round(
+                        float(row_dict.get("averageViewPercentage", 0)), 2
+                    ),
+                    "impressions": 0,
+                    "impressions_click_through_rate": 0,
+                })
+                rows_written += 1
+
+    print(f"  ✅  traffic_sources.csv written — {rows_written} rows across "
+          f"{videos_done} videos saved to {output_path}")

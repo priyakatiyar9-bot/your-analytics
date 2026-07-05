@@ -119,8 +119,6 @@ def fetch_analytics_for_all_videos(youtube_analytics, channel_id):
             "estimatedMinutesWatched,"
             "averageViewDuration,"
             "averageViewPercentage,"
-            "impressions,"
-            "impressionsClickThroughRate,"
             "subscribersGained,"
             "subscribersLost,"
             "likes,"
@@ -151,10 +149,9 @@ def fetch_analytics_for_all_videos(youtube_analytics, channel_id):
                 "average_percentage_viewed": round(
                     float(row_dict.get("averageViewPercentage", 0)), 2
                 ),
-                "impressions": int(row_dict.get("impressions", 0)),
-                "impression_click_through_rate": round(
-                    float(row_dict.get("impressionsClickThroughRate", 0)), 2
-                ),
+                # impressions/CTR not available via Analytics API — use 0
+                "impressions": 0,
+                "impression_click_through_rate": 0,
                 "subscribers_gained": int(row_dict.get("subscribersGained", 0)),
                 "subscribers_lost": int(row_dict.get("subscribersLost", 0)),
                 "likes": int(row_dict.get("likes", 0)),
