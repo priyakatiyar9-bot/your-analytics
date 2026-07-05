@@ -343,10 +343,11 @@ def callback():
 
     try:
         redirect_uri = url_for("callback", _external=True)
+        state = session.get("oauth_state", "")
         channel_id, channel_name, expires_at = handle_callback(
             redirect_uri,
             request.url,
-            session.get("oauth_state"),
+            state,
         )
         return render_template_string(
             SUCCESS_PAGE,

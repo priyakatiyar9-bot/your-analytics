@@ -6,10 +6,12 @@ import os
 import datetime
 import json
 
-from google_auth_oauthlib.flow import Flow, InstalledAppFlow
-from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 import googleapiclient.discovery
+import requests as req
+from urllib.parse import urlparse, parse_qs
 
 from database import save_token, load_token_by_label, load_token
 
@@ -21,47 +23,68 @@ SCOPES = [
 ACCESS_DURATION_DAYS = 30
 
 
-def get_client_config():
-    return {
-        "web": {
-            "client_id":     os.environ["GOOGLE_CLIENT_ID"],
-            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
-            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["https://your-analytics.onrender.com/callback"],
-        }
+def get_authorization_url(redirect_uri):
+    """
+    Builds the Google OAuth URL manually — no PKCE, plain OAuth2 web flow.
+    Returns (auth_url, state).
+    """
+    import secrets
+    state = secrets.token_urlsafe(32)
+
+    params = {
+        "client_id":     os.environ["GOOGLE_CLIENT_ID"],
+        "redirect_uri":  redirect_uri,
+        "response_type": "code",
+        "scope":         " ".join(SCOPES),
+        "access_type":   "offline",
+        "prompt":        "consent",
+        "state":         state,
     }
 
-
-def get_web_flow(redirect_uri):
-    flow = Flow.from_client_config(
-        get_client_config(),
-        scopes=SCOPES,
-        redirect_uri=redirect_uri,
-    )
-    return flow
-
-
-def get_authorization_url(redirect_uri):
-    flow = get_web_flow(redirect_uri)
-    auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-    )
+    from urllib.parse import urlencode
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
     return auth_url, state
 
 
 def handle_callback(redirect_uri, authorization_response_url, state):
-    flow = get_web_flow(redirect_uri)
+    """
+    Exchanges the authorisation code for credentials.
+    No PKCE — plain server-side OAuth2.
+    """
+    parsed = urlparse(authorization_response_url)
+    params = parse_qs(parsed.query)
+    code = params.get("code", [None])[0]
 
-    # Fetch token without code verifier (standard web app flow)
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # allow http in dev if needed
-    flow.fetch_token(
-        authorization_response=authorization_response_url,
+    if not code:
+        raise Exception("No authorisation code found in callback URL.")
+
+    # Exchange code for tokens
+    token_response = req.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code":          code,
+            "client_id":     os.environ["GOOGLE_CLIENT_ID"],
+            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+            "redirect_uri":  redirect_uri,
+            "grant_type":    "authorization_code",
+        },
     )
-    credentials = flow.credentials
 
+    token_data = token_response.json()
+
+    if "error" in token_data:
+        raise Exception(f"Token exchange failed: {token_data}")
+
+    credentials = Credentials(
+        token=         token_data["access_token"],
+        refresh_token= token_data.get("refresh_token"),
+        token_uri=     "https://oauth2.googleapis.com/token",
+        client_id=     os.environ["GOOGLE_CLIENT_ID"],
+        client_secret= os.environ["GOOGLE_CLIENT_SECRET"],
+        scopes=        SCOPES,
+    )
+
+    # Get the channel info
     youtube = googleapiclient.discovery.build(
         "youtube", "v3", credentials=credentials
     )
@@ -72,9 +95,9 @@ def handle_callback(redirect_uri, authorization_response_url, state):
     if not channel_response.get("items"):
         raise Exception("No YouTube channel found for this Google account.")
 
-    channel      = channel_response["items"][0]
-    channel_id   = channel["id"]
-    channel_name = channel["snippet"]["title"]
+    channel       = channel_response["items"][0]
+    channel_id    = channel["id"]
+    channel_name  = channel["snippet"]["title"]
     channel_label = channel_name.lower().replace(" ", "_")[:30]
 
     expires_at = save_token(channel_id, channel_name, channel_label, credentials)
